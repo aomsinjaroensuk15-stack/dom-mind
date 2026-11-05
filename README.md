@@ -50,7 +50,7 @@ Notes:
   point the loader at a tag (`/v1.0.0/dom-mind.js`) instead of `main`.
 - Clicking the bookmark again reveals the existing HUD instead of mounting a second one.
 
-### 3. Use it
+### 3. [Use it](https://dainty-quokka-f09412.netlify.app)
 
 1. Open any page and click the bookmark. The HUD appears top-right.
 2. Type a goal, e.g. `fill the checkout form and place the order`.
