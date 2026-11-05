@@ -1,0 +1,3 @@
+[
+  { "action": "CLICK", "find": { "role": "btn", "name": "Delete account" }, "thought": "delete the account" }
+]

@@ -1,0 +1,7 @@
+[
+  { "action": "TYPE", "find": { "role": "in", "name": "Full name" }, "args": { "text": "Dom Mind", "clear": true }, "thought": "fill the name" },
+  { "action": "TYPE", "find": { "role": "in", "name": "Email" }, "args": { "text": "agent@example.com", "clear": true }, "thought": "fill the email" },
+  { "action": "SELECT", "find": { "role": "sel", "name": "Country" }, "args": { "value": "th" }, "thought": "pick Thailand" },
+  { "action": "CLICK", "find": { "role": "chk", "name": "terms" }, "thought": "accept the terms" },
+  { "action": "CLICK", "find": { "role": "btn", "name": "Place order" }, "thought": "place the order" }
+]
