@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "DOM-Mind",
+  "version": "2.2.0",
+  "description": "Loads the DOM-Mind agent payload on every page so a mission continues across navigation on any origin.",
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+  "host_permissions": ["http://*/*", "https://*/*"]
+}
