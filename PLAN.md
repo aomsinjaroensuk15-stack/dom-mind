@@ -443,3 +443,101 @@ Where the shipped payload differs from this plan, and why:
 - **Numeric IDs are 1–899**, with collision bumping and a 900-entry reuse map, so they stay 2–3 digits.
 - **Compaction is deterministic** (a line per six steps), not a summarizer call, to keep the loop at
   one inference per step.
+
+---
+
+## 17. v1.1 reliability layer
+
+Four additions, none of which change the action contract for existing backends:
+
+- **Scored re-resolution.** `resolveTarget` no longer needs an exact id. It ranks every collected node
+  against `{role, name}` (exact 6, prefix 4, substring 3, token overlap ≤4, plus role/interactive/
+  in-view terms) and accepts the best match at ≥2.5. An unknown id first consults the site memory, so
+  `[42]` can still hit after a re-render moved the element.
+- **State-hash stall detection.** Every reduce produces `fp = hash32(tree | level)`. The agent keeps
+  the last eight; a fingerprint seen three times in a row means the page is not reacting, which injects
+  `NO PROGRESS` into the prompt and memory (six repeats halts the run). This catches A→B→A loops that
+  the identical-action signature guard cannot see. `WAIT`/`READ` are exempt because they legitimately
+  leave the page unchanged.
+- **`EXTRACT` action.** Targets a container and pulls rows out of a `<table>`, a `<ul>/<ol>`, or the
+  largest repeated child group; each row keeps text (140 chars), the first link path, and a price if
+  one cell matches a currency pattern. Results render in a HUD pane with a TSV copy button, and rows
+  are capped at 40 so the prompt never carries the payload.
+- **Per-origin affordance memory** (`dm:site:<host>`, 80 entries, `localStorage`). A successful action,
+  or a match that needed name/memory resolution, records `{role|name → id, hits}`. Learned elements
+  carry a `*` in the tree and are preferred by the model; counts appear in the tree header, and
+  `forget()` clears the host.
+
+---
+
+## 18. v2.0 missions
+
+- **Record over loop.** A mission is `IndexedDB/dom-mind/missions` keyed by id, mirrored to
+  `dm:mission:last`. Fields: goal, status, origin/url, step, timestamps, subgoals, memory, last 12
+  actions, undo log, results, visits, autoResume. Written after every tick, before a same-tab link
+  click, on pause, and on finish. A blocked IDB degrades to the mirror, so resume still works.
+- **Subgoal stack.** Seeded deterministically from the page (editable fields → checkbox → commit
+  button), replaced by a `PLAN` action (`args.summary = "a | b | c"`) or closed by `NEXT`. Completed
+  steps are carried by text across re-plans. The prompt shows `SUBGOALS` with statuses and tells the
+  model to work only the active one.
+- **Backtracking.** `captureUndo` runs inside `performAction`, before the mutation: url, scroll, role,
+  name, old value/checked. `applyUndo` re-resolves the element by name (the v1.1 matcher), restores the
+  value, or calls `history.back()` when the url moved. Two identical state hashes undo and inject
+  `NO PROGRESS`; four halt.
+- **Resume.** Boot reads the newest mission, rejects anything terminal or older than six hours, adopts
+  it into the agent (paused), and renders it. `Resume` continues the loop at the stored step instead of
+  resetting it; `autoResume` starts immediately. The one remaining manual step is loading the payload on
+  the new page — automatic injection is the service-worker milestone, deliberately not in v2.0.
+- **Testability.** `act(action, {settle:false})` is a manual override that skips the settle wait, so the
+  undo path is exercisable in a background tab where timers are frozen.
+
+---
+
+## 19. v2.1 presence
+
+- **Why a worker.** The mission record made a run resumable, but the payload still had to be present.
+  A service worker is the only bookmarklet-compatible way to be present on the *next* same-origin
+  page: it can rewrite the navigation response to include the script tag.
+- **Scope of the trick.** `register()` requires an http(s), same-origin script, so blob:/data: workers
+  are impossible and a bookmarklet cannot install one on a third-party origin. Presence therefore
+  ships as a file the user hosts (`presence-sw.js`), plus a HUD button that registers it on the current
+  origin and unregisters only that script.
+- **Rewrite rules.** `mode === 'navigate'`, GET, same-origin, not the payload itself; inject before the
+  last `</body>`; skip when the marker is already present; drop length/encoding/validators that would
+  otherwise describe the wrong body. No caching, no cross-origin interception.
+- **Continuation.** The payload detects the marker tag and the worker controller, and resumes a mission
+  whose stored status is `active` when `dm:auto` is not `"0"`. A `paused` or `halted` mission is never
+  auto-continued, so a deliberate pause stays paused across pages.
+- **Costs.** Two saves per unload (`pagehide` + `visibilitychange`), one HTML re-parse per navigation,
+  and one extra HTTP round trip in the worker for the document fetch.
+
+---
+
+## 20. v2.2 skills and extension
+
+- **Why compile.** A mission costs one inference per step; a completed mission is a known-good path.
+  Recording a semantic target (`role` + accessible name) next to every step's id makes that path
+  replayable without a model, which is the only way on-device inference becomes cheap on the second
+  visit.
+- **Record shape.** `IndexedDB/dom-mind-skills/skills`, keyed by id, scoped by host, 20 entries with
+  oldest-eviction, `{name, goal, origin, host, url, steps[], createdAt, runs, ok}`. Steps keep only the
+  action, `find`, and the arguments that matter; `PLAN`/`NEXT`/`ASK`/`DONE`/`ABORT` are dropped.
+- **Replay.** Resolution happens per step at run time through the v1.1 matcher, so element churn does not
+  invalidate a skill; the first failure halts with the step and reason instead of clicking blind. Runs
+  and successes are counted, which is the seed of a "trust this skill" signal.
+- **Extension.** MV3 content script at `document_idle` on `http(s)`, one injection per page, guarded by
+  the same marker attribute the worker uses. It is subject to page CSP exactly like the bookmarklet; it
+  exists to remove the per-page click, not to bypass policy.
+- **Hidden tabs.** Chrome suspends timers in background tabs, so `closeSettle` could never resolve and
+  the loop stalled mid-step forever. `performAction` now treats `visibilityState === 'hidden'` as
+  no-wait: the action dispatches, the observation is marked `unsettled`, and the run proceeds. Trade-off
+  accepted: a background run may act before async content lands, and its timings are meaningless.
+- **Skills cannot bypass safety.** `replay` applies the same `denyReason` check and the same `RISKY_RE`
+  gate as a live step, so a compiled `CLICK "Place order"` stops and asks again, and host trust is not
+  inherited from the run that produced the skill.
+- **Settle-free clicks are unverified, not failed.** With an `unsettled` observation the click verifier
+  returns `kind: 'unverified'` instead of `FAIL (no DOM change after click)`; the zero mutation count is a
+  property of skipping settle, not evidence the click did nothing.
+- **Not done.** Skill selection heuristics ("this page looks like the one the skill was recorded on"),
+  parameterised skills, and cross-host skills. All three need a similarity signal the reducer does not
+  produce yet.

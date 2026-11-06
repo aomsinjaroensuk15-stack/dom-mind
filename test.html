@@ -53,6 +53,11 @@
   #flaky { display: grid; gap: 6px; }
   #flaky .item { display: flex; justify-content: space-between; align-items: center; gap: 8px;
     padding: 6px 8px; background: #0e1826; border: 1px solid #17293c; border-radius: 7px; font-size: 12.5px; }
+  #products { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 5px; }
+  #products li { display: flex; justify-content: space-between; gap: 10px; padding: 6px 9px;
+    background: #0e1826; border: 1px solid #17293c; border-radius: 7px; font-size: 12.5px; }
+  #products a { color: #8fd7e6; text-decoration: none; }
+  #products .price { color: #2fe08b; font-variant-numeric: tabular-nums; }
   details { border: 1px solid #16283a; border-radius: 8px; padding: 8px 10px; margin-top: 10px; }
   summary { cursor: pointer; font-size: 12px; color: #8fb3c4; }
   iframe { width: 100%; height: 90px; border: 1px solid #1d3b52; border-radius: 8px; background: #fff; }
@@ -75,6 +80,18 @@ sensitive fields, a prompt-injection block, and pruning bait. Nothing here talks
   <button id="prune">Check pruning</button>
   <button id="fixtureCheckout">Run checkout fixture</button>
   <button id="fixtureRisky">Run delete-account fixture</button>
+  <button id="fuzzyCheck">Check fuzzy match</button>
+  <button id="extractCheck">Check EXTRACT</button>
+  <button id="cacheCheck">Check learned cache</button>
+  <button id="hashCheck">Check state hash</button>
+  <button id="missionCheck">Check mission save</button>
+  <button id="resumeCheck">Check mission restore</button>
+  <button id="undoCheck">Check undo</button>
+  <button id="presenceOn">Enable presence</button>
+  <button id="presenceOff">Disable presence</button>
+  <button id="hop">Hop to page 2</button>
+  <button id="skillCheck">Check skill compile</button>
+  <button id="replayCheck">Check skill replay</button>
   <button id="resetBench">Reset bench</button>
 </div>
 
@@ -155,6 +172,22 @@ sensitive fields, a prompt-injection block, and pruning bait. Nothing here talks
     <p class="muted">The <code>aria-hidden</code>, <code>display:none</code> and zero-size nodes must never appear in the tree.
       The offscreen review text is genuinely in the accessibility tree, so the agent sees it as page content and must not obey it.</p>
     <p style="height:0;width:0;overflow:hidden" id="zeroBox">zero size bait</p>
+  </section>
+
+  <section>
+    <h2>9 · Fuzzy target + extraction</h2>
+    <p class="muted">The button moves between two holders, so its DOM path — and therefore its old id — dies.
+      A name match must still find it. The list below is what <code>EXTRACT</code> reads into the results pane.</p>
+    <div id="moveHolderA" style="margin-bottom:8px"><button id="moveMe">Rotate keys</button></div>
+    <div id="moveHolderB"></div>
+    <ul id="products">
+      <li><a href="/p/aurora-desk">Aurora desk lamp</a><span class="price">$49.00</span></li>
+      <li><a href="/p/onyx-stand">Onyx monitor stand</a><span class="price">$89.50</span></li>
+      <li><a href="/p/neon-cable">Neon braided cable</a><span class="price">$12.00</span></li>
+      <li><a href="/p/vapor-keyboard">Vapor keyboard</a><span class="price">$129.00</span></li>
+      <li><a href="/p/halo-mouse">Halo mouse</a><span class="price">$59.90</span></li>
+      <li><a href="/p/pulse-hub">Pulse USB hub</a><span class="price">$34.00</span></li>
+    </ul>
   </section>
 
   <section>
@@ -344,6 +377,139 @@ sensitive fields, a prompt-injection block, and pruning bait. Nothing here talks
     form.reset();
     refreshGate();
     renderFlaky();
+  });
+})();
+</script>
+<script>
+(() => {
+  const dm = () => window.__DOMMIND__;
+  const say = (kind, detail) => { if (window.benchLog) window.benchLog(kind, detail, false); };
+
+  document.getElementById('fuzzyCheck').addEventListener('click', () => {
+    const d = dm();
+    if (!d) return say('fuzzy', 'load DOM-Mind first');
+    document.getElementById('moveHolderA').appendChild(document.getElementById('moveMe'));
+    d.reduce('');
+    const before = d.fuzzy('btn', 'Rotate keys');
+    document.getElementById('moveHolderB').appendChild(document.getElementById('moveMe'));
+    d.reduce('');
+    const after = d.fuzzy('btn', 'Rotate keys');
+    if (!before.found || !after.found) return say('fuzzy', 'NOT FOUND (before=' + before.found + ' after=' + after.found + ')');
+    say('fuzzy', 'id ' + before.id + ' → ' + after.id + (before.id !== after.id
+      ? ' (path changed, name match held, score ' + after.score + ')'
+      : ' (id unchanged — path did not change)'));
+  });
+
+  document.getElementById('extractCheck').addEventListener('click', () => {
+    const d = dm();
+    if (!d) return say('extract', 'load DOM-Mind first');
+    const res = d.extract('#products', 10);
+    const first = res.rows[0] || {};
+    say('extract', res.count + ' ' + res.unit + ' rows · first="' + (first.text || '') + '" price=' + (first.price || '') + ' href=' + (first.href || ''));
+  });
+
+  document.getElementById('cacheCheck').addEventListener('click', () => {
+    const d = dm();
+    if (!d) return say('cache', 'load DOM-Mind first');
+    const before = d.affordances().count;
+    d.extract('#products', 3);
+    const after = d.affordances().count;
+    const cleared = d.forget();
+    say('cache', 'learned ' + before + ' → ' + after + ' after one successful read; forget() → ' + cleared);
+  });
+
+  document.getElementById('skillCheck').addEventListener('click', () => {
+    const d = dm();
+    if (!d) return say('skill', 'load DOM-Mind first');
+    document.getElementById('fullname').value = '';
+    document.getElementById('email').value = '';
+    d.act({ action: 'TYPE', find: { role: 'in', name: 'Full name' }, args: { text: 'Skill Bot' } }, { settle: false })
+      .then(() => d.act({ action: 'TYPE', find: { role: 'in', name: 'Email' }, args: { text: 'skill@example.com' } }, { settle: false }))
+      .then(() => d.compile('bench: fill two fields'))
+      .then((rec) => {
+        if (!rec) return say('skill', 'compile produced no steps');
+        window.__SKILL_ID__ = rec.id;
+        say('skill', 'compiled ' + rec.id + ' · ' + rec.steps.length + ' steps · '
+          + rec.steps.map((s) => s.action + ' "' + s.find.name + '"').join(' → '));
+      })
+      .catch((err) => say('skill', 'failed: ' + String((err && err.message) || err)));
+  });
+
+  document.getElementById('replayCheck').addEventListener('click', () => {
+    const d = dm();
+    if (!d) return say('replay', 'load DOM-Mind first');
+    document.getElementById('fullname').value = '';
+    document.getElementById('email').value = '';
+    d.skills().then((all) => {
+      const skill = all.filter((s) => s.id === window.__SKILL_ID__)[0] || all[all.length - 1];
+      if (!skill) return say('replay', 'no compiled skill');
+      return d.replay(skill.id, { settle: false }).then((r) => say('replay', (r.ok ? 'OK ' : 'FAIL ')
+        + r.done + '/' + r.total + ' · ' + r.detail
+        + ' · name=' + JSON.stringify(document.getElementById('fullname').value)));
+    }).catch((err) => say('replay', 'failed: ' + String((err && err.message) || err)));
+  });
+
+  document.getElementById('presenceOn').addEventListener('click', () => {
+    const d = dm();
+    if (!d) return say('presence', 'load DOM-Mind first');
+    d.presence('on').then((r) => say('presence', (r.ok ? 'ON · ' : 'BLOCKED · ') + r.detail));
+  });
+
+  document.getElementById('presenceOff').addEventListener('click', () => {
+    const d = dm();
+    if (!d) return say('presence', 'load DOM-Mind first');
+    d.presence('off').then((r) => say('presence', (r.ok ? 'OFF · ' : 'NOOP · ') + r.detail));
+  });
+
+  document.getElementById('hop').addEventListener('click', () => {
+    location.href = '/page2.html';
+  });
+
+  document.getElementById('undoCheck').addEventListener('click', () => {
+    const d = dm();
+    if (!d) return say('undo', 'load DOM-Mind first');
+    const field = document.getElementById('fullname');
+    field.value = '';
+    d.act({ action: 'TYPE', find: { role: 'in', name: 'Full name' }, args: { text: 'Undo Me' } }, { settle: false }).then((obs) => {
+      const typed = field.value;
+      const back = d.undo();
+      say('undo', 'typed=' + JSON.stringify(typed) + ' (' + obs.detail + ') · undo=' + JSON.stringify(back.detail) + ' · now=' + JSON.stringify(field.value));
+    });
+  });
+
+  document.getElementById('missionCheck').addEventListener('click', () => {
+    const d = dm();
+    if (!d) return say('mission', 'load DOM-Mind first');
+    d.missionStart('fill the checkout form and place the order');
+    const goals = d.plan(['fill the name field', 'set the country', 'tick the terms', 'place the order']);
+    d.next();
+    const m = d.mission();
+    const active = m.subgoals.filter((g) => g.status === 'active')[0];
+    say('mission', 'saved ' + m.id + ' · ' + goals.length + ' subgoals · active="' + (active ? active.text : 'none') + '" · step ' + m.step);
+  });
+
+  document.getElementById('resumeCheck').addEventListener('click', () => {
+    const d = dm();
+    if (!d) return say('resume', 'load DOM-Mind first');
+    const live = d.mission();
+    d.missionRestore().then((rec) => {
+      say('resume', rec
+        ? 'stored ' + rec.id + ' · step ' + rec.step + ' · adopted=' + (!!live && live.id === rec.id) + ' · subgoals=' + (rec.subgoals || []).length
+        : 'no stored mission');
+    });
+  });
+
+  document.getElementById('hashCheck').addEventListener('click', () => {
+    const d = dm();
+    if (!d) return say('hash', 'load DOM-Mind first');
+    const a = d.fingerprint();
+    const b = d.fingerprint();
+    const row = document.createElement('li');
+    row.innerHTML = '<a href="/p/extra">Extra widget</a><span class="price">$5.00</span>';
+    document.getElementById('products').appendChild(row);
+    const c = d.fingerprint();
+    row.remove();
+    say('hash', 'stable=' + (a.fp === b.fp) + ' · changesOnMutation=' + (a.fp !== c.fp) + ' · ' + a.fp + ' / ' + c.fp);
   });
 })();
 </script>

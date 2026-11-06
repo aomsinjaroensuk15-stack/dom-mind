@@ -1,4 +1,4 @@
-# DOM-Mind v1.0.0
+# DOM-Mind v2.2.0
 
 A Chrome bookmarklet that puts an autonomous agent inside the current tab. It reads the page as a
 reduced Accessibility & Action Tree, asks a local WebGPU LLM for one JSON action at a time, and
@@ -13,6 +13,10 @@ No server. No build step. No page data leaves the tab. One payload file served f
 |---|---|
 | `dom-mind.js` | The whole payload. This is the file the loader fetches. |
 | `test.html` | Local bench: gated form, flaky re-render, consent wall, modal, shadow DOM, sensitive fields, injection text, pruning bait, cross-origin frame. |
+| `presence-sw.js` | Optional presence worker. Re-injects the payload on same-origin navigations so a mission continues without another bookmark click. |
+| `page2.html` | Second bench page with no payload tag, used to prove presence across a real navigation. |
+| `extension/manifest.json` | MV3 manifest that loads the payload on every http(s) page. |
+| `extension/content.js` | Content script that supplies presence on origins you do not serve. |
 | `fixtures/*.json` | Scripted decision sequences for the `oracle` backend, so the loop is testable with no model downloaded. |
 | `PLAN.md` | Architecture, state machines, prompt structure, milestones, risks. |
 | `README.md` | This file. |
@@ -50,7 +54,7 @@ Notes:
   point the loader at a tag (`/v1.0.0/dom-mind.js`) instead of `main`.
 - Clicking the bookmark again reveals the existing HUD instead of mounting a second one.
 
-### 3. [Use it](https://dainty-quokka-f09412.netlify.app)
+### 3. Use it
 
 1. Open any page and click the bookmark. The HUD appears top-right.
 2. Type a goal, e.g. `fill the checkout form and place the order`.
@@ -74,6 +78,8 @@ Notes:
 | **engine** | backend, tier, load/unload, weight download progress |
 | **tree** | the exact reduced tree sent to the model, with level/tokens/node counts |
 | **safety** | whether this host is trusted for risky actions, and a revoke button |
+| **results** | rows pulled by the last `EXTRACT`, with a **Copy as TSV** button |
+| **mission** | the live mission: id, step, subgoal stack, **Resume** / **Undo** / **Discard**, auto-resume toggle |
 | **−** | collapse to the title bar |
 | **■** | destroy the instance (same as **F8**) |
 | **Header drag** | move the HUD; the position is remembered |
@@ -98,6 +104,102 @@ Hotkeys: **F8** kills the instance from anywhere · **Esc** dismisses a confirm 
 
 Loop guards: 60 steps, 5 minutes, three consecutive failures, and an identical-action signature
 repeated three times blocks that action for a step.
+
+## Reliability (v1.1)
+
+- **Scored re-resolution.** An action's id no longer has to survive a re-render. If the id is gone, the
+  executor ranks every collected node against the action's `find: {role, name}` — exact 6, prefix 4,
+  substring 3, token overlap up to 4, plus role/interactive/in-view terms — and takes the best at ≥2.5,
+  logging `matched "…" by name · score 4.5`.
+- **`EXTRACT` action.** Point it at a container and it returns rows from a `<table>`, a `<ul>/<ol>`, or
+  the largest repeated child group: text (140 chars), the first link path, and a price when a cell
+  matches a currency pattern. Rows land in the **results** pane and never exceed 40, so a long listing
+  costs the prompt one summary line, not the payload.
+- **State-hash stall detection.** Each reduce hashes the tree. A state seen three times in a row injects
+  `NO PROGRESS` into the prompt and memory, which catches A→B→A loops the action signature cannot see;
+  six identical states halts the run instead of burning the step budget. `WAIT`/`READ` are exempt.
+- **Per-origin memory.** Successful actions, and matches that needed name resolution, are remembered
+  per host (`dm:site:<host>`, 80 entries) as `{role|name → id, hits}`. Learned elements carry a `*` in
+  the tree so the model prefers them, the count shows in the tree header, and `forget()` wipes the host.
+  This is what makes a second visit cheaper: known targets are resolved without exploration.
+
+## Presence (v2.1)
+
+The mission survived a navigation in v2.0 but still needed the bookmarklet to be clicked on the new
+page. Presence removes that click on origins that serve `presence-sw.js`.
+
+- **How it works.** `presence-sw.js` intercepts same-origin `navigate` requests, fetches the HTML,
+  inserts `<script src="/dom-mind.js" data-dom-mind-presence>` before `</body>`, and returns the page
+  with `content-length`, `content-encoding`, `etag` and `last-modified` stripped so nothing is served
+  stale. It passes everything non-HTML and cross-origin straight through, never caches, and calls
+  `skipWaiting()` + `clients.claim()` so it takes over the tab after one reload.
+- **Auto-continue.** The injected payload sees the marker tag, and when the newest mission is still
+  `active` (not `paused`, not `halted`) and `dm:auto` is not `"0"`, it resumes at the stored step
+  instead of waiting for **Resume**. Every page unload also writes the mission (`pagehide`,
+  `visibilitychange`), so the hop lands with an accurate step.
+- **Turning it off.** **Disable presence** in the mission panel unregisters only registrations whose
+  script is `presence-sw.js` — it never touches a site's own worker — and the next navigation loads
+  normally, with no payload.
+
+**The honest limit:** a bookmarklet cannot install a worker on a site it does not serve. `register()`
+rejects blob: and data: script URLs and requires the script and scope to be same-origin with the page,
+so presence covers origins where you host the file yourself (the bench, localhost, your own site).
+For arbitrary third-party sites the payload has to be present before it can run — that is a browser
+extension's job, not a bookmarklet's. Everything else still works without presence: the mission is
+stored and resumes on the next click.
+
+## Missions (v2.0)
+
+A run is no longer a loop that dies with the page. It is a record that survives it.
+
+- **Stored mission.** `IndexedDB` database `dom-mind`, store `missions`, keyed by mission id, with a
+  `localStorage` mirror (`dm:mission:last`) so a blocked IDB still leaves something to restore. The
+  record holds goal, status, origin, step, budget, subgoal stack, compacted memory, the last 12 actions,
+  the undo log, extracted results and the pages visited.
+- **Subgoal stack.** The planner seeds 2–4 subgoals from the page (fill these fields → tick this box →
+  click that button); the model works only the `[active]` one and emits `NEXT` to close it or `PLAN`
+  with `args.summary = "first | second | third"` to replace the list. Completed items are kept by text,
+  so a re-plan does not resurrect finished work.
+- **Backtracking.** Every mutating action records what it changed (element, old value/checked, scroll,
+  url) in a 12-entry undo log. Two identical page states trigger an automatic undo and a `NO PROGRESS`
+  prompt block; four halt the run. `Undo` in the mission panel rolls back the last change by hand, and
+  if the recorded url differs it calls `history.back()` instead.
+- **Resume after navigation.** The record is saved before every same-tab link click and after every
+  step, so a page that unloads mid-run still leaves an accurate mission. On the next page, loading the
+  payload restores the goal, subgoals, step count, memory, results and undo log, fills the goal field,
+  and shows `resumed m… · step N`. Auto-resume (checkbox) starts the loop immediately instead.
+
+Resume is per-mission, not per-tab. Without presence you click the bookmark on the new page; with
+presence (below) the next page loads the payload itself. Neither change touches the record format, so a
+mission started before an upgrade still resumes.
+
+## Skills (v2.2)
+
+A finished mission can be compiled into a script that replays with **no inference at all**.
+
+- **Compile.** Every recorded step keeps a semantic target (`role` + accessible name) beside the id, so
+  `compile()` turns a mission into `[{action, find:{role,name}, args}]` — TYPE/SELECT/CLICK/KEY/SCROLL/
+  NAV/WAIT/READ, with plan and bookkeeping actions dropped. Records live in `IndexedDB`
+  `dom-mind-skills`, per host, 20 max (oldest evicted), each tracking `runs` and `ok`.
+- **Auto-compile.** A run that ends `done` saves its skill by itself and toasts `Skill saved · N steps`.
+- **Replay.** `replay(id)` walks the steps, re-resolving each target by name at the moment it runs, so a
+  page that moved its elements still works. It stops at the first failure and reports which step and
+  why, rather than clicking blind. `{settle:false}` skips the settle wait for scripted/bench use.
+
+This is the difference between an agent and a macro: the first visit costs inference, every later visit
+costs nothing, and the mission record stays the source of truth.
+
+## Extension (any origin)
+
+Presence only covers origins that serve `presence-sw.js`. For third-party sites, load the same payload
+as a content script:
+
+1. `chrome://extensions` → enable **Developer mode** → **Load unpacked** → pick the `extension/` folder.
+2. Open any page; the payload mounts itself, once per page, and missions resume as usual.
+
+The content script injects a `<script src="…/dom-mind.js" data-dom-mind-presence="extension">`, so the
+same CSP limit applies: a page that forbids the payload origin still wins. Change `PAYLOAD` in
+`extension/content.js` to your own build (pin a tag rather than `main` once you release).
 
 ## Safety
 
@@ -162,8 +264,75 @@ Run against `test.html` on a local static server:
 - the confirm gate opened on the risky *Place order* click and blocked the run until answered
 - no console errors, no failed script or fixture requests
 
-Not verified in this environment: end-to-end completion of the fixture run and any WebGPU inference.
-Both need a **visible, focused** tab — Chrome clamps timers to roughly once per second (or freezes
+v1.1 reliability layer, same bench:
+
+- **scored re-resolution** — the `Rotate keys` button was moved to a second parent, killing its id. Before the
+  move `fuzzy('btn', 'Rotate keys')` returned `263`, after it returned `636` with score `9.5` (role 2.5 +
+  exact name 6 + interactive 1). Same element, no id needed.
+- **`EXTRACT`** — on the six-row product list: `6 item rows`, first row `"Aurora desk lamp $49.00"` with
+  `price=$49.00` and `href=/p/aurora-desk`.
+- **state hash** — two reduces of an unchanged page gave the same fingerprint (`1lygm8f`); appending one
+  `<li>` changed it (`151wqfi`), and removing the row restored the original.
+- **per-origin memory** — one `EXTRACT` recorded `1` affordance for `127.0.0.1:8123`, a repeat read kept it
+  at `1` and incremented its hit count, and `forget()` took it to `0`.
+
+v2.0 missions, same bench:
+
+- **mission record** — `missionStart` seeded three subgoals from the page, `plan([...])` replaced them with
+  four, and `next()` closed the first: `[done] fill the name field`, `[active] set the country`, two
+  pending. `missionRestore()` read the same id (`mmw4xabhbt7js`), step and stack back out of IndexedDB.
+- **undo** — `act(TYPE, {settle:false})` typed `"Undo Me"` and verified `value="Undo Me"`; `undo()`
+  reported `value back to ""` and the field was empty again.
+- **resume** — destroying the instance and loading the payload again (the same path a fresh page takes)
+  adopted mission `mmw4xabhbt7js` at step `1`, restored the goal `fill the checkout form and place the
+  order`, the four subgoals with `set the country` active, and mounted exactly one HUD.
+
+v2.1 presence, same bench:
+
+- **injection without a bookmark click** — after `presence('on')` on `test.html` reported
+  `controlled: true`, navigating to `page2.html` (which contains no payload tag at all) mounted the HUD
+  from `<script src="/dom-mind.js" data-dom-mind-presence>`: `presence: injected by the worker`.
+- **mission carried across the navigation** — the page2 instance came up on mission `mmw4xy63jxi4t`,
+  restored its goal and subgoal stack, and auto-continued instead of waiting for Resume: it ran
+  `TYPE [107] → ok (value="test")`, `CLICK [686] → ok (1 mutation)`, `DONE`, finishing at step 3.
+  That run also exercises the action loop itself end to end, which earlier attempts never reached.
+- **reversible** — `presence('off')` returned `unregistered 1 presence scope`. After the reload the page had
+  no controller, no `data-dom-mind-presence` tag, no `__DOMMIND__` and 0 HUD hosts, so the worker is
+  genuinely removable and does not outlive the feature.
+
+v2.2 skills, same bench:
+
+- **compile** — two recorded `TYPE` steps became `TYPE "Full name"` and `TYPE "Email"`. Before the label
+  fix the target read `"Full name Ada Lovelace fullname text"`, i.e. it embedded the field's *value*, so a
+  skill would have been invalidated by its own typing. Targets are now the stable label.
+- **replay** — `replay(id, {settle:false})` returned `{ok: true, done: 4, total: 4}` with
+  `4 steps replayed with no inference`, refilling `fullname="Skill Bot"` and `email="skill@example.com"`;
+  the stored counters went to `runs: 2, ok: 2`. No model was loaded for any of it.
+
+The loop only executed on the presence hop because that renderer ran timers normally; the earlier
+bench tab had them frozen. Treat step timings from either as unrepresentative.
+
+Gated checkout, end to end (v2.2):
+
+- **gate** — the run reached step 4, the confirm gate opened on *Place order*, and the click was not
+  dispatched until it was allowed. Nothing else could get past it.
+- **mission** — after allowing: name, email, country and terms set, `orderResult` visible, mission
+  `mmw4yjrupmvzw` stored `done` at step 6.
+- **verifier** — that click reports `ok (click dispatched, settle skipped)`. The first attempt reported
+  `FAIL (no DOM change after click)` for a click that had in fact placed the order, because a settle-free
+  observation zeroes the mutation count; it now reports *unverified* rather than failed.
+- **skill** — the finished mission compiled to five steps ending in `CLICK "Place order"`, so a replayed
+  skill reaches the risky action and has to clear the gate itself. Skills do not inherit host trust.
+- **replay through the gate** — replaying that skill re-ran all five steps with no model loaded, opened
+  the gate again on *Place order* and only continued once allowed:
+  `{ok: true, done: 5, total: 5}`, `5 steps replayed with no inference`, stored counters `runs: 1, ok: 1`,
+  fields refilled to `Dom Mind` / `agent@example.com` / `th` / terms checked.
+
+Not verified in this environment: `EXTRACT`/`PLAN`/`NEXT` as actions inside a running loop, the
+stall escalation (three identical states → `NO PROGRESS`, six → halt), auto-compile firing on a real
+`done`, the unpacked extension (installing extensions is outside this session's tooling), and any WebGPU
+inference. The checkout run above happened in a **hidden** tab, so every step took the settle-free path;
+no run here has exercised the 250 ms quiet-window path end to end — Chrome clamps timers to roughly once per second (or freezes
 them entirely) in a hidden tab, which stalls the settle loop mid-step, and this session's preview tab
 reported `document.visibilityState === 'hidden'`. The WebGPU path also needs a model download and a
 GPU, neither of which was available here. Treat those as untested, not as passing.
@@ -182,10 +351,22 @@ the tab in front, using the ctx/vram/tok-s readouts.
   still runs, but there is no language model.
 - **Cross-origin iframes** are opaque: they appear as one `frm` node, and nothing inside can be driven.
   **Closed shadow roots** cannot be traversed either.
-- **Navigation destroys the agent.** Reload/route change kills the instance; click the bookmark again.
-  A single-page-app route change that does not reload is handled by the next reduce.
+- **Navigation destroys the agent.** A reload or route change kills the instance. The mission survives
+  it (see Missions): with presence the next page re-injects and continues by itself, without it click
+  the bookmark and the run resumes from the stored step. A single-page-app route change that does not
+  reload is handled by the next reduce.
+- **Presence is per-origin and opt-in.** It only covers origins that serve `presence-sw.js`, requires
+  https or localhost, and a page CSP that forbids the payload (or `worker-src`) defeats it. A
+  bookmarklet cannot register a worker on somebody else's site; use the `extension/` folder for that.
+- **A replayed skill is not self-healing.** It resolves targets by name and stops at the first missing
+  one with the step named, but if a site redesigns a flow the skill needs recompiling — there is no
+  model in the loop to improvise a new path.
 - **A permanently animating page** (carousel, clock) never reaches the quiet window, so every step
   pays the 1.8 s settle cap and observations are marked `unsettled`.
+- **A hidden tab skips settle.** Chrome suspends timers in background tabs, which used to stall the loop
+  forever mid-step. When `document.visibilityState` is `hidden` the executor now runs settle-free and
+  marks the observation `unsettled`, so a background run completes but may act before async content
+  arrives. Timings from a background tab mean nothing.
 - **No persistence**: goal, history and memory are per-page, in memory.
 - **Prompt injection** is mitigated (fenced data, executor-side enforcement) but a 1B model can still
   be talked into wrong choices; the confirm gate and denylist are the real backstop.
@@ -209,6 +390,27 @@ window.__DOMMIND__.reduce('goal')                    // { level, tokens, nodes, 
 window.__DOMMIND__.highlight(42)                     // spotlight element [42]
 window.__DOMMIND__.loadEngine('webllm', 'm')         // load a tier
 window.__DOMMIND__.engine()
+window.__DOMMIND__.extract('#products', 20)           // rows out of a container
+window.__DOMMIND__.results()                          // last EXTRACT payload
+window.__DOMMIND__.fuzzy('btn', 'Place order')        // scored name match, no id needed
+window.__DOMMIND__.affordances()                      // what this host has taught it
+window.__DOMMIND__.forget()                           // clear that memory for this host
+window.__DOMMIND__.fingerprint()                      // tree hash used for stall detection
+window.__DOMMIND__.mission()                          // current mission record
+window.__DOMMIND__.missionStart('goal')               // create and persist a mission
+window.__DOMMIND__.plan(['step one', 'step two'])     // set the subgoal stack
+window.__DOMMIND__.next()                             // close the active subgoal
+window.__DOMMIND__.undo()                             // roll back the last mutation
+window.__DOMMIND__.act({ action: 'TYPE', find: { name: 'Full name' }, args: { text: 'x' } }, { settle: false })
+window.__DOMMIND__.missionRestore()                   // read the newest stored mission
+window.__DOMMIND__.missionForget()                    // clear stored missions
+window.__DOMMIND__.presence()                         // { controlled, injected, script }
+window.__DOMMIND__.presence('on')                     // register presence-sw.js on this origin
+window.__DOMMIND__.presence('off')                    // unregister only that worker
+window.__DOMMIND__.compile('name')                     // turn this mission into a replayable skill
+window.__DOMMIND__.skills()                            // every compiled skill for this browser
+window.__DOMMIND__.replay(skillId, { settle: false })  // replay it with no model
+window.__DOMMIND__.skillForget()                       // clear compiled skills
 window.__DOMMIND__.answer(true, false)               // resolve an open confirm gate
 window.__DOMMIND__.reveal()
 window.__DOMMIND__.destroy()

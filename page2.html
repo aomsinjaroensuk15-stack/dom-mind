@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DOM-Mind bench · page 2</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 28px 24px 120px; background: #070a12; color: #cfe7f2;
+    font: 14px/1.6 ui-sans-serif, system-ui, sans-serif;
+  }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  h1 span { color: #00d5e6; }
+  .sub { color: #6f8b99; margin: 0 0 22px; font-size: 12.5px; }
+  section {
+    background: #0b1220; border: 1px solid #16283a; border-radius: 12px; padding: 16px;
+    max-width: 620px; margin-bottom: 16px;
+  }
+  section h2 { font-size: 12px; letter-spacing: .16em; text-transform: uppercase; color: #5f8fa4; margin: 0 0 12px; }
+  p { margin: 0 0 10px; font-size: 13px; color: #9fb6c2; }
+  a { color: #00d5e6; }
+  code { color: #cdf6ff; }
+  .muted { color: #6f8b99; font-size: 12px; }
+  button {
+    font: inherit; font-size: 12.5px; padding: 7px 12px; border-radius: 8px; cursor: pointer;
+    color: #d8f7ff; background: #10182a; border: 1px solid #1d3b52;
+  }
+  .ok { color: #2fe08b; font-weight: 700; }
+</style>
+</head>
+<body>
+
+<h1>DOM-<span>Mind</span> · page 2</h1>
+<p class="sub">A plain second page with no payload tag of its own. If the presence worker is installed, DOM-Mind
+mounted here by itself when you navigated — and the mission from page 1 came back with it.</p>
+
+<section>
+  <h2>1 · Mission check</h2>
+  <p>Open the console and run <code>__DOMMIND__.state().mission</code>. A resumed mission shows its id, the
+  active subgoal and the step it reached; <code>__DOMMIND__.presence()</code> reports
+  <code>injected: true</code>.</p>
+  <p class="muted" id="presenceLine">presence: unknown (the payload is not mounted, so nothing was injected)</p>
+</section>
+
+<section>
+  <h2>2 · Another form</h2>
+  <p>A different page, so the mission has to notice that the DOM changed underneath it.</p>
+  <form id="noteForm" autocomplete="off">
+    <label for="note" style="display:block;font-size:12px;color:#8fb3c4;margin-bottom:4px">Note</label>
+    <input id="note" name="note" type="text" placeholder="what happened on the previous page?"
+      style="width:100%;padding:8px 10px;font:inherit;font-size:13px;color:#eafcff;background:#060c16;
+             border:1px solid #1d3b52;border-radius:8px;margin-bottom:10px">
+    <button type="submit" id="saveNote">Save note</button>
+  </form>
+  <p class="muted" id="noteState">nothing saved</p>
+</section>
+
+<section>
+  <h2>3 · Back</h2>
+  <p><a href="/test.html">Return to the bench</a> — the mission should still be the same one.</p>
+</section>
+
+<script>
+(() => {
+  const line = document.getElementById('presenceLine');
+  const paint = () => {
+    const dm = window.__DOMMIND__;
+    if (!dm) {
+      line.textContent = 'presence: no payload on this page (worker not installed, or this load bypassed it)';
+      return;
+    }
+    const p = dm.presence();
+    const s = dm.state();
+    line.textContent = 'presence: ' + (p.injected ? 'injected by the worker' : (p.controlled ? 'worker controls this tab' : 'mounted without the worker'))
+      + (s.mission ? ' · mission ' + s.mission.id + ' · step ' + s.mission.step + ' · ' + (s.mission.active || 'no active subgoal') : ' · no mission');
+    line.className = 'ok';
+  };
+  paint();
+  setTimeout(paint, 300);
+  setTimeout(paint, 1200);
+
+  document.getElementById('noteForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    document.getElementById('noteState').textContent = 'saved: ' + document.getElementById('note').value;
+  });
+})();
+</script>
+</body>
+</html>
